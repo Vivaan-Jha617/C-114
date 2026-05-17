@@ -57,23 +57,19 @@ def _make_loader() -> instaloader.Instaloader:
     )
 
 
-def _login(loader: instaloader.Instaloader, username: str, password: str) -> bool:
-    """Returns True if login succeeded, False if it failed (stories will be skipped)."""
+def _login(loader: instaloader.Instaloader, username: str, session_id: str) -> bool:
+    """Authenticate using browser session cookie. Returns True on success."""
     os.makedirs(_DATA_DIR, exist_ok=True)
-    if os.path.exists(SESSION_FILE):
-        try:
-            loader.load_session_from_file(username, SESSION_FILE)
-            logger.info("Loaded saved Instagram session.")
-            return True
-        except Exception:
-            logger.warning("Saved session invalid — re-logging in.")
     try:
-        loader.login(username, password)
-        loader.save_session_to_file(SESSION_FILE)
-        logger.info("Logged in to Instagram and saved session.")
+        import urllib.parse
+        # Decode URL-encoded cookie value (e.g. %3A → :)
+        decoded = urllib.parse.unquote(session_id)
+        loader.context.update_cookies({"sessionid": decoded})
+        loader.context.username = username
+        logger.info("Authenticated via session cookie.")
         return True
     except Exception as exc:
-        logger.warning("Instagram login failed (%s) — stories will be skipped.", exc)
+        logger.warning("Session cookie login failed (%s) — stories will be skipped.", exc)
         return False
 
 
@@ -136,14 +132,14 @@ def _get_story_media(item, media_dir: Path) -> list[str]:
     return [p] if p else []
 
 
-def fetch_all(username: str, password: str) -> list[ContentItem]:
+def fetch_all(username: str, password: str, session_id: str = "") -> list[ContentItem]:
     # Fresh media dir each run
     if MEDIA_DIR.exists():
         shutil.rmtree(MEDIA_DIR)
     MEDIA_DIR.mkdir(parents=True)
 
     loader = _make_loader()
-    logged_in = _login(loader, username, password)
+    logged_in = _login(loader, username, session_id or password)
     profile = instaloader.Profile.from_username(loader.context, TARGET)
     cutoff = _cutoff()
     items: list[ContentItem] = []

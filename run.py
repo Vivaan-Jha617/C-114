@@ -42,7 +42,8 @@ def main(dry_run: bool = False) -> None:
     # 1. Fetch posts, reels, stories + download media
     items = instagram_fetcher.fetch_all(
         username=env("INSTAGRAM_USERNAME"),
-        password=env("INSTAGRAM_PASSWORD"),
+        password=os.getenv("INSTAGRAM_PASSWORD", ""),
+        session_id=os.getenv("INSTAGRAM_SESSION_ID", ""),
     )
 
     # 2. Gemini: generate bulletin + per-media captions
