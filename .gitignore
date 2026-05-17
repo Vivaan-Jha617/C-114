@@ -1,8 +1,6 @@
 .env
 __pycache__/
 *.py[cod]
-*.pyo
 .venv/
-venv/
-/tmp/.instaloader_session_*
+/data/
 *.log

@@ -1,5 +1,4 @@
 anthropic>=0.40.0
 instaloader>=4.13
-twilio>=9.3.0
-schedule>=1.2.2
+requests>=2.32.0
 python-dotenv>=1.0.0

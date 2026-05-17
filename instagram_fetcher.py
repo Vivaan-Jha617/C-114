@@ -1,130 +1,185 @@
 """
-Instagram content fetcher for @anandmihir.
-Fetches posts, reels, and stories from the last 24 hours using instaloader.
+Fetches posts, reels, and stories from @anandmihir in the last 24 hours,
+downloading all media (images/videos) to a local temp directory.
 """
 
-import os
 import logging
-from datetime import datetime, timedelta, timezone
+import os
+import shutil
 from dataclasses import dataclass, field
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import requests
 import instaloader
 
 logger = logging.getLogger(__name__)
 
+TARGET = "anandmihir"
+SESSION_FILE = "/data/ig_session"
+MEDIA_DIR = Path("/data/media")
+MAX_MEDIA = 10          # cap total downloaded files per run
+MAX_VIDEO_MB = 15       # skip videos larger than this
+MAX_IMAGE_MB = 5
+
 
 @dataclass
 class ContentItem:
-    content_type: str  # "post", "reel", "story"
+    kind: str               # post | reel | story
     shortcode: str
     timestamp: datetime
     caption: str
     hashtags: list[str] = field(default_factory=list)
-    url: str = ""
-    media_type: str = ""  # "image", "video", "sidecar"
     location: str = ""
+    url: str = ""
+    media_paths: list[str] = field(default_factory=list)   # local files
 
 
-class InstagramFetcher:
-    def __init__(self, username: str, password: str | None = None):
-        self.target_account = "anandmihir"
-        self.loader = instaloader.Instaloader(
-            download_pictures=False,
-            download_videos=False,
-            download_video_thumbnails=False,
-            download_geotags=False,
-            download_comments=False,
-            save_metadata=False,
-            compress_json=False,
-            quiet=True,
-        )
-        self._login(username, password)
+def _cutoff() -> datetime:
+    return datetime.now(tz=timezone.utc) - timedelta(hours=24)
 
-    def _login(self, username: str, password: str | None) -> None:
-        if not username or not password:
-            logger.info("No credentials provided — fetching public content only (no stories).")
+
+def _make_loader() -> instaloader.Instaloader:
+    return instaloader.Instaloader(
+        download_pictures=False,
+        download_videos=False,
+        download_video_thumbnails=False,
+        download_geotags=False,
+        download_comments=False,
+        save_metadata=False,
+        compress_json=False,
+        quiet=True,
+        sleep=True,
+        max_connection_attempts=3,
+    )
+
+
+def _login(loader: instaloader.Instaloader, username: str, password: str) -> None:
+    os.makedirs("/data", exist_ok=True)
+    if os.path.exists(SESSION_FILE):
+        try:
+            loader.load_session_from_file(username, SESSION_FILE)
+            logger.info("Loaded saved Instagram session.")
             return
-        try:
-            session_file = f"/tmp/.instaloader_session_{username}"
-            if os.path.exists(session_file):
-                self.loader.load_session_from_file(username, session_file)
-                logger.info("Loaded existing Instagram session.")
+        except Exception:
+            logger.warning("Saved session invalid — re-logging in.")
+    loader.login(username, password)
+    loader.save_session_to_file(SESSION_FILE)
+    logger.info("Logged in to Instagram and saved session.")
+
+
+def _download(url: str, dest: Path, max_mb: float) -> str | None:
+    if dest.exists():
+        return str(dest)
+    try:
+        with requests.get(url, stream=True, timeout=60,
+                          headers={"User-Agent": "Mozilla/5.0"}) as r:
+            r.raise_for_status()
+            size = 0
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(8192):
+                    size += len(chunk)
+                    if size > max_mb * 1024 * 1024:
+                        logger.warning("Skipping %s — exceeds %s MB limit.", dest.name, max_mb)
+                        dest.unlink(missing_ok=True)
+                        return None
+                    f.write(chunk)
+        logger.debug("Downloaded %s (%.1f KB)", dest.name, size / 1024)
+        return str(dest)
+    except Exception as exc:
+        logger.warning("Download failed for %s: %s", dest.name, exc)
+        dest.unlink(missing_ok=True)
+        return None
+
+
+def _get_post_media(post: instaloader.Post, media_dir: Path) -> list[str]:
+    paths: list[str] = []
+    sc = post.shortcode
+
+    if post.typename == "GraphSidecar":
+        for i, node in enumerate(post.get_sidecar_nodes()):
+            if node.is_video:
+                p = _download(node.video_url,
+                              media_dir / f"{sc}_{i}.mp4", MAX_VIDEO_MB)
             else:
-                self.loader.login(username, password)
-                self.loader.save_session_to_file(session_file)
-                logger.info("Logged in to Instagram and saved session.")
-        except instaloader.exceptions.BadCredentialsException:
-            logger.error("Invalid Instagram credentials.")
-            raise
-        except Exception as exc:
-            logger.warning("Could not log in to Instagram: %s — stories will be skipped.", exc)
+                p = _download(node.display_url,
+                              media_dir / f"{sc}_{i}.jpg", MAX_IMAGE_MB)
+            if p:
+                paths.append(p)
+    elif post.is_video:
+        p = _download(post.video_url, media_dir / f"{sc}.mp4", MAX_VIDEO_MB)
+        if p:
+            paths.append(p)
+    else:
+        p = _download(post.url, media_dir / f"{sc}.jpg", MAX_IMAGE_MB)
+        if p:
+            paths.append(p)
 
-    def _cutoff(self) -> datetime:
-        return datetime.now(tz=timezone.utc) - timedelta(hours=24)
+    return paths
 
-    def fetch_posts_and_reels(self) -> list[ContentItem]:
-        """Fetch posts and reels from the last 24 hours."""
-        items: list[ContentItem] = []
-        cutoff = self._cutoff()
-        try:
-            profile = instaloader.Profile.from_username(self.loader.context, self.target_account)
-            for post in profile.get_posts():
-                post_time = post.date_utc.replace(tzinfo=timezone.utc)
-                if post_time < cutoff:
-                    break
-                content_type = "reel" if post.is_video and post.video_url else "post"
-                location = ""
-                if post.location:
-                    location = getattr(post.location, "name", "") or ""
-                items.append(ContentItem(
-                    content_type=content_type,
-                    shortcode=post.shortcode,
-                    timestamp=post_time,
-                    caption=post.caption or "",
-                    hashtags=list(post.caption_hashtags),
-                    url=f"https://www.instagram.com/p/{post.shortcode}/",
-                    media_type="video" if post.is_video else ("sidecar" if post.typename == "GraphSidecar" else "image"),
-                    location=location,
-                ))
-        except Exception as exc:
-            logger.error("Error fetching posts/reels: %s", exc)
-        return items
 
-    def fetch_stories(self) -> list[ContentItem]:
-        """Fetch stories from the last 24 hours (requires login)."""
-        items: list[ContentItem] = []
-        if not self.loader.context.is_logged_in:
-            logger.info("Skipping stories — not logged in.")
-            return items
-        cutoff = self._cutoff()
-        try:
-            profile = instaloader.Profile.from_username(self.loader.context, self.target_account)
-            for story in self.loader.get_stories(userids=[profile.userid]):
-                for item in story.get_items():
-                    story_time = item.date_utc.replace(tzinfo=timezone.utc)
-                    if story_time < cutoff:
-                        continue
-                    items.append(ContentItem(
-                        content_type="story",
-                        shortcode=item.mediaid,
-                        timestamp=story_time,
-                        caption=item.caption or "",
-                        hashtags=list(item.caption_hashtags) if item.caption else [],
-                        media_type="video" if item.is_video else "image",
-                    ))
-        except Exception as exc:
-            logger.error("Error fetching stories: %s", exc)
-        return items
+def _get_story_media(item, media_dir: Path) -> list[str]:
+    mid = str(item.mediaid)
+    if item.is_video:
+        p = _download(item.video_url, media_dir / f"story_{mid}.mp4", MAX_VIDEO_MB)
+    else:
+        p = _download(item.url, media_dir / f"story_{mid}.jpg", MAX_IMAGE_MB)
+    return [p] if p else []
 
-    def fetch_all(self) -> list[ContentItem]:
-        """Return all content from the last 24 hours, sorted newest first."""
-        posts = self.fetch_posts_and_reels()
-        stories = self.fetch_stories()
-        all_items = posts + stories
-        all_items.sort(key=lambda x: x.timestamp, reverse=True)
-        logger.info(
-            "Fetched %d item(s) from @%s: %d post/reel, %d story.",
-            len(all_items), self.target_account, len(posts), len(stories),
-        )
-        return all_items
+
+def fetch_all(username: str, password: str) -> list[ContentItem]:
+    # Fresh media dir each run
+    if MEDIA_DIR.exists():
+        shutil.rmtree(MEDIA_DIR)
+    MEDIA_DIR.mkdir(parents=True)
+
+    loader = _make_loader()
+    _login(loader, username, password)
+    profile = instaloader.Profile.from_username(loader.context, TARGET)
+    cutoff = _cutoff()
+    items: list[ContentItem] = []
+    total_media = 0
+
+    # ── Posts & Reels ────────────────────────────────────────────────────────
+    for post in profile.get_posts():
+        ts = post.date_utc.replace(tzinfo=timezone.utc)
+        if ts < cutoff:
+            break
+        if total_media < MAX_MEDIA:
+            media = _get_post_media(post, MEDIA_DIR)
+            total_media += len(media)
+        else:
+            media = []
+        kind = "reel" if post.is_video else "post"
+        loc = getattr(post.location, "name", "") if post.location else ""
+        items.append(ContentItem(
+            kind=kind, shortcode=post.shortcode, timestamp=ts,
+            caption=post.caption or "", hashtags=list(post.caption_hashtags),
+            location=loc, url=f"https://www.instagram.com/p/{post.shortcode}/",
+            media_paths=media,
+        ))
+
+    # ── Stories ──────────────────────────────────────────────────────────────
+    for story in loader.get_stories(userids=[profile.userid]):
+        for item in story.get_items():
+            ts = item.date_utc.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                continue
+            if total_media < MAX_MEDIA:
+                media = _get_story_media(item, MEDIA_DIR)
+                total_media += len(media)
+            else:
+                media = []
+            items.append(ContentItem(
+                kind="story", shortcode=str(item.mediaid), timestamp=ts,
+                caption=item.caption or "",
+                hashtags=list(item.caption_hashtags) if item.caption else [],
+                media_paths=media,
+            ))
+
+    items.sort(key=lambda x: x.timestamp, reverse=True)
+    logger.info(
+        "Fetched %d item(s) from @%s, downloaded %d media file(s).",
+        len(items), TARGET, total_media,
+    )
+    return items

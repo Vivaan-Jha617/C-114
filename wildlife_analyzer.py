@@ -1,6 +1,6 @@
 """
-Analyzes Instagram content for wildlife sightings using the Claude API
-and generates a park-wide sighting update summary.
+Uses Claude to analyse Instagram content and produce a park-wide sighting bulletin.
+Returns both the full text summary and a per-item short caption for each media file.
 """
 
 import json
@@ -13,70 +13,69 @@ from instagram_fetcher import ContentItem
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are an expert wildlife naturalist and park ranger assistant.
-Your job is to analyze social media content from a wildlife photographer/naturalist
-and extract all wildlife sighting information to produce a clear, engaging daily park
-sighting update.
+SYSTEM = """You are an expert wildlife naturalist producing a daily park sighting bulletin.
+Analyse the Instagram content provided and return a JSON object with two keys:
 
-For each piece of content, identify:
-- Species sighted (common name + scientific name if determinable)
-- Location / zone within the park (if mentioned)
-- Number of individuals seen (if mentioned)
-- Notable behaviour (hunting, feeding, mating, with cubs/young, etc.)
-- Time of sighting (if mentioned)
-- Any other noteworthy details (rare species, unusual behaviour, exceptional photography conditions)
+1. "bulletin" — a WhatsApp-ready park sighting update (max 1200 chars). Use:
+   - Emoji species icons where helpful 🐯🦁🦌🐘
+   - Short bullet points grouped by species or zone
+   - A brief closing line
 
-Produce the final summary in the style of an official park daily sighting bulletin,
-suitable for sharing with wildlife enthusiasts and tourists via WhatsApp.
-Use clear section headings, bullet points, and an upbeat, professional tone.
-If no wildlife content is found, say so clearly.
-"""
+2. "captions" — a dict mapping each shortcode to a one-line wildlife caption
+   (≤ 120 chars) for that post's photo/video. If a post has no wildlife, set
+   its caption to null.
 
-ANALYSIS_PROMPT_TEMPLATE = """Below is all the Instagram content posted by @anandmihir in the last 24 hours.
-Analyse each item for wildlife sightings and then produce a single consolidated
-"Park Wildlife Sighting Update" for today ({date}).
+Respond with ONLY valid JSON. No markdown fences."""
 
-Content items:
+USER_TEMPLATE = """Date: {date}
+Instagram account: @anandmihir
+
+Content from the last 24 hours:
 {content}
 
----
-Produce the WhatsApp-ready bulletin now. Start with a title line, then list sightings
-by species or zone, and end with a short closing note. Keep it under 1500 characters
-so it fits comfortably in one WhatsApp message."""
+Respond with JSON."""
 
 
-def _format_content_for_prompt(items: list[ContentItem]) -> str:
+def _fmt(items: list[ContentItem]) -> str:
     if not items:
-        return "(No posts, reels, or stories found in the last 24 hours.)"
-    parts: list[str] = []
-    for i, item in enumerate(items, 1):
-        ts = item.timestamp.strftime("%Y-%m-%d %H:%M UTC")
-        tags = " ".join(f"#{h}" for h in item.hashtags[:10])
-        loc = f" | Location: {item.location}" if item.location else ""
+        return "(No content found in the last 24 hours.)"
+    parts = []
+    for it in items:
+        ts = it.timestamp.strftime("%H:%M UTC")
+        loc = f" | 📍{it.location}" if it.location else ""
+        tags = " ".join(f"#{h}" for h in it.hashtags[:8])
+        has_media = f"[{len(it.media_paths)} media file(s)]" if it.media_paths else "[no media]"
         parts.append(
-            f"[{i}] Type: {item.content_type.upper()} | Time: {ts}{loc}\n"
-            f"Caption: {item.caption[:600] or '(no caption)'}\n"
-            f"Tags: {tags or '(none)'}"
+            f"shortcode={it.shortcode} | {it.kind.upper()} @ {ts}{loc} {has_media}\n"
+            f"Caption: {it.caption[:400] or '(none)'}\n"
+            f"Tags: {tags or '—'}"
         )
     return "\n\n".join(parts)
 
 
-class WildlifeAnalyzer:
-    def __init__(self, api_key: str):
-        self.client = anthropic.Anthropic(api_key=api_key)
+def generate(items: list[ContentItem], api_key: str) -> tuple[str, dict[str, str | None]]:
+    """Returns (bulletin_text, {shortcode: caption_or_None})."""
+    client = anthropic.Anthropic(api_key=api_key)
+    date = datetime.now(tz=timezone.utc).strftime("%A, %d %B %Y")
+    prompt = USER_TEMPLATE.format(date=date, content=_fmt(items))
 
-    def generate_summary(self, items: list[ContentItem]) -> str:
-        today = datetime.now(tz=timezone.utc).strftime("%A, %d %B %Y")
-        content_block = _format_content_for_prompt(items)
-        user_prompt = ANALYSIS_PROMPT_TEMPLATE.format(date=today, content=content_block)
+    logger.info("Sending %d item(s) to Claude.", len(items))
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        system=SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = response.content[0].text.strip()
 
-        logger.info("Sending %d content item(s) to Claude for wildlife analysis.", len(items))
-        response = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        summary = response.content[0].text.strip()
-        logger.info("Wildlife summary generated (%d characters).", len(summary))
-        return summary
+    try:
+        data = json.loads(raw)
+        bulletin = data.get("bulletin", "").strip()
+        captions = data.get("captions", {})
+    except json.JSONDecodeError:
+        logger.warning("Claude returned non-JSON — using raw text as bulletin.")
+        bulletin = raw
+        captions = {}
+
+    logger.info("Bulletin: %d chars, captions for %d item(s).", len(bulletin), len(captions))
+    return bulletin, captions
