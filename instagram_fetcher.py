@@ -79,12 +79,22 @@ def fetch_all(username: str, password: str = "", session_id: str = "") -> list[C
     items: list[ContentItem] = []
     total_media = 0
 
-    # ── Posts & Reels — fetch ONLY @anandmihir's own posts ───────────────────
+    # ── Posts & Reels — home feed (all accounts @anandmihir follows) ─────────
     try:
-        # user_medias_v1 calls /api/v1/feed/user/{id}/ — only that user's posts
-        medias = cl.user_medias_v1(user_id, 30)
+        from instagrapi.extractors import extract_media_v1
+        raw = cl.get_timeline_feed()
+        medias = []
+        for item in raw.get("feed_items", []):
+            media_data = item.get("media_or_ad")
+            if not media_data:
+                continue
+            try:
+                medias.append(extract_media_v1(media_data))
+            except Exception:
+                pass
+        logger.info("Timeline feed: %d post(s) found.", len(medias))
     except Exception as exc:
-        logger.error("Failed to fetch posts: %s", exc)
+        logger.error("Failed to fetch timeline feed: %s", exc)
         medias = []
 
     for media in medias:
@@ -128,9 +138,16 @@ def fetch_all(username: str, password: str = "", session_id: str = "") -> list[C
             location=loc, url=url, media_paths=media_paths,
         ))
 
-    # ── Stories ──────────────────────────────────────────────────────────────
+    # ── Stories — from all followed accounts ─────────────────────────────────
     try:
-        stories = cl.user_stories(user_id)
+        tray = cl.reels_tray()
+        all_stories = []
+        for reel in tray[:20]:   # cap at 20 accounts to avoid rate limits
+            try:
+                all_stories.extend(cl.user_stories(reel.user.pk))
+            except Exception:
+                pass
+        stories = all_stories
         for story in stories:
             ts = story.taken_at
             if ts.tzinfo is None:
