@@ -2,3 +2,4 @@ google-generativeai>=0.8.0
 instaloader>=4.13
 requests>=2.32.0
 python-dotenv>=1.0.0
+# smtplib and email are Python built-ins — no extra install needed

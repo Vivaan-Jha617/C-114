@@ -3,7 +3,7 @@ set -e
 
 # Export Docker env vars into a file cron can source (cron has no env by default)
 printenv \
-  | grep -E "^(INSTAGRAM_|ANTHROPIC_|GREENAPI_|WHATSAPP_)" \
+  | grep -E "^(INSTAGRAM_|GEMINI_|EMAIL_)" \
   | sed "s/'/'\\\\''/g; s/=\(.*\)/='\1'/" \
   > /app/.env.runtime
 

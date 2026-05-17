@@ -1,9 +1,9 @@
 """
-Orchestrates the full pipeline: fetch Instagram → analyse → WhatsApp with media.
+Orchestrates the full pipeline: fetch Instagram → analyse → email with media.
 
 Usage:
     python run.py            # full run
-    python run.py --dry-run  # fetch + analyse + print, no WhatsApp
+    python run.py --dry-run  # fetch + analyse + print, no email sent
 """
 
 import argparse
@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 import instagram_fetcher
 import wildlife_analyzer
-import whatsapp_sender
+import email_sender
 
 load_dotenv()
 
@@ -45,37 +45,31 @@ def main(dry_run: bool = False) -> None:
         password=env("INSTAGRAM_PASSWORD"),
     )
 
-    # 2. Claude: generate bulletin + per-media captions
+    # 2. Gemini: generate bulletin + per-media captions
     bulletin, captions = wildlife_analyzer.generate(
         items=items,
         api_key=env("GEMINI_API_KEY"),
     )
 
-    date_str = datetime.now(tz=timezone.utc).strftime("%d %b %Y")
-    header = f"🌿 *Wildlife Sighting Update — {date_str}*\nSightings from @anandmihir:"
+    # Collect all downloaded media paths across all items
+    all_media: list[str] = []
+    for item in sorted(items, key=lambda x: x.timestamp):
+        all_media.extend(item.media_paths)
 
-    # Print for logs regardless
-    log.info("\n%s\n%s", header, bulletin)
-    for sc, cap in captions.items():
-        if cap:
-            log.info("  [%s] %s", sc, cap)
+    date_str = datetime.now(tz=timezone.utc).strftime("%d %b %Y")
+    log.info("\n=== BULLETIN (%s) ===\n%s\n===================", date_str, bulletin)
 
     if dry_run:
-        log.info("Dry-run — WhatsApp skipped.")
+        log.info("Dry-run — email skipped. %d media file(s) ready.", len(all_media))
         return
 
-    # 3. Send via Green API (header + media files + bulletin)
-    client = whatsapp_sender.GreenAPIClient(
-        instance_id=env("GREENAPI_INSTANCE_ID"),
-        api_token=env("GREENAPI_API_TOKEN"),
-        to_number=env("WHATSAPP_TO_NUMBER"),   # e.g. 919820839798
-    )
-    whatsapp_sender.send_summary(
-        client=client,
-        items=items,
+    # 3. Send email with all media attached
+    email_sender.send(
+        from_email=env("EMAIL_FROM"),
+        app_password=env("EMAIL_APP_PASSWORD"),
+        to_email=env("EMAIL_TO"),
         bulletin=bulletin,
-        captions=captions,
-        header=header,
+        media_paths=all_media,
     )
     log.info("=== Wildlife Summary DONE ===")
 
@@ -83,5 +77,5 @@ def main(dry_run: bool = False) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--dry-run", action="store_true",
-                   help="Fetch and analyse but do not send WhatsApp")
+                   help="Fetch and analyse but do not send email")
     main(dry_run=p.parse_args().dry_run)

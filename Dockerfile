@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY instagram_fetcher.py wildlife_analyzer.py whatsapp_sender.py run.py ./
+COPY instagram_fetcher.py wildlife_analyzer.py email_sender.py run.py ./
 
 # 9 PM IST = 15:30 UTC
 RUN echo '30 15 * * * root . /app/.env.runtime && cd /app && python run.py >> /var/log/wildlife.log 2>&1' \
