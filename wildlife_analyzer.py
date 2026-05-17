@@ -7,16 +7,21 @@ import json
 import logging
 from datetime import datetime, timezone
 
-import google.generativeai as genai
+import requests
 
 from instagram_fetcher import ContentItem
 
 logger = logging.getLogger(__name__)
 
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "gemini-1.5-flash:generateContent"
+)
+
 SYSTEM = """You are an expert wildlife naturalist producing a daily park sighting bulletin.
 Analyse the Instagram content provided and return a JSON object with two keys:
 
-1. "bulletin" — a WhatsApp-ready park sighting update (max 1200 chars). Use:
+1. "bulletin" — an email-ready park sighting update (max 1200 chars). Use:
    - Emoji species icons where helpful 🐯🦁🦌🐘
    - Short bullet points grouped by species or zone
    - A brief closing line
@@ -55,18 +60,23 @@ def _fmt(items: list[ContentItem]) -> str:
 
 def generate(items: list[ContentItem], api_key: str) -> tuple[str, dict[str, str | None]]:
     """Returns (bulletin_text, {shortcode: caption_or_None})."""
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=SYSTEM,
-    )
-
     date = datetime.now(tz=timezone.utc).strftime("%A, %d %B %Y")
-    prompt = USER_TEMPLATE.format(date=date, content=_fmt(items))
+    prompt = SYSTEM + "\n\n" + USER_TEMPLATE.format(date=date, content=_fmt(items))
 
-    logger.info("Sending %d item(s) to Gemini.", len(items))
-    response = model.generate_content(prompt)
-    raw = response.text.strip()
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1024},
+    }
+
+    logger.info("Sending %d item(s) to Gemini REST API.", len(items))
+    resp = requests.post(
+        GEMINI_URL,
+        params={"key": api_key},
+        json=payload,
+        timeout=60,
+    )
+    resp.raise_for_status()
+    raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
     # Strip markdown fences if Gemini adds them
     if raw.startswith("```"):
