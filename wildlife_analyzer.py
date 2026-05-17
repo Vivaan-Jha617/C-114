@@ -3,6 +3,8 @@ Uses Google Gemini (free tier) to analyse Instagram content and produce
 a park-wide wildlife sighting bulletin + per-media captions.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 from datetime import datetime, timezone

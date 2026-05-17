@@ -3,6 +3,8 @@ Fetches posts, reels, and stories from @anandmihir in the last 24 hours,
 downloading all media (images/videos) to a local temp directory.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import shutil

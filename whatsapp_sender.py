@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 WhatsApp sender using Green API (free tier).
 Supports plain text messages AND media file uploads (images + videos).
