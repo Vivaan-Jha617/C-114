@@ -13,10 +13,8 @@ from instagram_fetcher import ContentItem
 
 logger = logging.getLogger(__name__)
 
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-1.5-flash:generateContent"
-)
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 SYSTEM = """You are an expert wildlife naturalist producing a daily park sighting bulletin.
 Analyse the Instagram content provided and return a JSON object with two keys:
@@ -64,19 +62,24 @@ def generate(items: list[ContentItem], api_key: str) -> tuple[str, dict[str, str
     prompt = SYSTEM + "\n\n" + USER_TEMPLATE.format(date=date, content=_fmt(items))
 
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1024},
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.4,
+        "max_tokens": 1024,
     }
 
-    logger.info("Sending %d item(s) to Gemini REST API.", len(items))
+    logger.info("Sending %d item(s) to Groq (Llama 3.3).", len(items))
     resp = requests.post(
-        GEMINI_URL,
-        params={"key": api_key},
+        GROQ_URL,
+        headers={"Authorization": f"Bearer {api_key}"},
         json=payload,
         timeout=60,
     )
     resp.raise_for_status()
-    raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    raw = resp.json()["choices"][0]["message"]["content"].strip()
 
     # Strip markdown fences if Gemini adds them
     if raw.startswith("```"):

@@ -48,7 +48,7 @@ def main(dry_run: bool = False) -> None:
     # 2. Gemini: generate bulletin + per-media captions
     bulletin, captions = wildlife_analyzer.generate(
         items=items,
-        api_key=env("GEMINI_API_KEY"),
+        api_key=env("GROQ_API_KEY"),
     )
 
     # Collect all downloaded media paths across all items
