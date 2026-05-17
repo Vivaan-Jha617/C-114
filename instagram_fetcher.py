@@ -79,9 +79,10 @@ def fetch_all(username: str, password: str = "", session_id: str = "") -> list[C
     items: list[ContentItem] = []
     total_media = 0
 
-    # ── Posts & Reels (last 30, filter by time) ──────────────────────────────
+    # ── Posts & Reels — fetch ONLY @anandmihir's own posts ───────────────────
     try:
-        medias = cl.user_medias(user_id, 30)
+        # user_medias_v1 calls /api/v1/feed/user/{id}/ — only that user's posts
+        medias = cl.user_medias_v1(user_id, 30)
     except Exception as exc:
         logger.error("Failed to fetch posts: %s", exc)
         medias = []
