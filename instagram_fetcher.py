@@ -18,8 +18,9 @@ import instaloader
 logger = logging.getLogger(__name__)
 
 TARGET = "anandmihir"
-SESSION_FILE = "/data/ig_session"
-MEDIA_DIR = Path("/data/media")
+_DATA_DIR = Path.home() / ".wildlife_summary"
+SESSION_FILE = str(_DATA_DIR / "ig_session")
+MEDIA_DIR = _DATA_DIR / "media"
 MAX_MEDIA = 10          # cap total downloaded files per run
 MAX_VIDEO_MB = 15       # skip videos larger than this
 MAX_IMAGE_MB = 5
@@ -57,7 +58,7 @@ def _make_loader() -> instaloader.Instaloader:
 
 
 def _login(loader: instaloader.Instaloader, username: str, password: str) -> None:
-    os.makedirs("/data", exist_ok=True)
+    os.makedirs(_DATA_DIR, exist_ok=True)
     if os.path.exists(SESSION_FILE):
         try:
             loader.load_session_from_file(username, SESSION_FILE)
