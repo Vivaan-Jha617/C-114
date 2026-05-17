@@ -57,18 +57,24 @@ def _make_loader() -> instaloader.Instaloader:
     )
 
 
-def _login(loader: instaloader.Instaloader, username: str, password: str) -> None:
+def _login(loader: instaloader.Instaloader, username: str, password: str) -> bool:
+    """Returns True if login succeeded, False if it failed (stories will be skipped)."""
     os.makedirs(_DATA_DIR, exist_ok=True)
     if os.path.exists(SESSION_FILE):
         try:
             loader.load_session_from_file(username, SESSION_FILE)
             logger.info("Loaded saved Instagram session.")
-            return
+            return True
         except Exception:
             logger.warning("Saved session invalid — re-logging in.")
-    loader.login(username, password)
-    loader.save_session_to_file(SESSION_FILE)
-    logger.info("Logged in to Instagram and saved session.")
+    try:
+        loader.login(username, password)
+        loader.save_session_to_file(SESSION_FILE)
+        logger.info("Logged in to Instagram and saved session.")
+        return True
+    except Exception as exc:
+        logger.warning("Instagram login failed (%s) — stories will be skipped.", exc)
+        return False
 
 
 def _download(url: str, dest: Path, max_mb: float) -> str | None:
@@ -137,7 +143,7 @@ def fetch_all(username: str, password: str) -> list[ContentItem]:
     MEDIA_DIR.mkdir(parents=True)
 
     loader = _make_loader()
-    _login(loader, username, password)
+    logged_in = _login(loader, username, password)
     profile = instaloader.Profile.from_username(loader.context, TARGET)
     cutoff = _cutoff()
     items: list[ContentItem] = []
@@ -162,8 +168,10 @@ def fetch_all(username: str, password: str) -> list[ContentItem]:
             media_paths=media,
         ))
 
-    # ── Stories ──────────────────────────────────────────────────────────────
-    for story in loader.get_stories(userids=[profile.userid]):
+    # ── Stories (only if logged in) ──────────────────────────────────────────
+    if not logged_in:
+        logger.info("Skipping stories — not logged in.")
+    for story in (loader.get_stories(userids=[profile.userid]) if logged_in else []):
         for item in story.get_items():
             ts = item.date_utc.replace(tzinfo=timezone.utc)
             if ts < cutoff:
