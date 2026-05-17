@@ -48,7 +48,7 @@ def main(dry_run: bool = False) -> None:
     # 2. Claude: generate bulletin + per-media captions
     bulletin, captions = wildlife_analyzer.generate(
         items=items,
-        api_key=env("ANTHROPIC_API_KEY"),
+        api_key=env("GEMINI_API_KEY"),
     )
 
     date_str = datetime.now(tz=timezone.utc).strftime("%d %b %Y")

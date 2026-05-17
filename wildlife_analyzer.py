@@ -1,13 +1,13 @@
 """
-Uses Claude to analyse Instagram content and produce a park-wide sighting bulletin.
-Returns both the full text summary and a per-item short caption for each media file.
+Uses Google Gemini (free tier) to analyse Instagram content and produce
+a park-wide wildlife sighting bulletin + per-media captions.
 """
 
 import json
 import logging
 from datetime import datetime, timezone
 
-import anthropic
+import google.generativeai as genai
 
 from instagram_fetcher import ContentItem
 
@@ -55,25 +55,32 @@ def _fmt(items: list[ContentItem]) -> str:
 
 def generate(items: list[ContentItem], api_key: str) -> tuple[str, dict[str, str | None]]:
     """Returns (bulletin_text, {shortcode: caption_or_None})."""
-    client = anthropic.Anthropic(api_key=api_key)
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        system_instruction=SYSTEM,
+    )
+
     date = datetime.now(tz=timezone.utc).strftime("%A, %d %B %Y")
     prompt = USER_TEMPLATE.format(date=date, content=_fmt(items))
 
-    logger.info("Sending %d item(s) to Claude.", len(items))
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        system=SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = response.content[0].text.strip()
+    logger.info("Sending %d item(s) to Gemini.", len(items))
+    response = model.generate_content(prompt)
+    raw = response.text.strip()
+
+    # Strip markdown fences if Gemini adds them
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
 
     try:
         data = json.loads(raw)
         bulletin = data.get("bulletin", "").strip()
         captions = data.get("captions", {})
     except json.JSONDecodeError:
-        logger.warning("Claude returned non-JSON — using raw text as bulletin.")
+        logger.warning("Gemini returned non-JSON — using raw text as bulletin.")
         bulletin = raw
         captions = {}
 
